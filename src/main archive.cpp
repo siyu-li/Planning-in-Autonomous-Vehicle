@@ -8,135 +8,11 @@
 #include "helpers.h"
 #include "json.hpp"
 #include "spline.h"
-#include <time.h>
-#include <algorithm>
-#include <float.h>
 
 // for convenience
-using namespace std;
 using nlohmann::json;
 using std::string;
 using std::vector;
-
-#define ACTION_NUM 5
-#define STATE_NUM 72
-#define SAFETY_DIS 30
-#define EPSILON 0.3
-#define GAMMA 0.95
-#define LR 0.1
-
-vector<vector<double>> Q(STATE_NUM, vector<double>(ACTION_NUM, 0));
-
-
-//get current state
-vector<int> get_current_state(int lane, vector<vector<double>>& sensor_fusion, double car_speed, double car_s){
-  vector<int> current_state(5,0);
-  current_state[0] = lane;
-  for(int i=0; i<sensor_fusion.size(); i++){
-    float d = sensor_fusion[i][6];
-    double check_car_s = sensor_fusion[i][5];
-    //car is in my lane
-    if(d<(lane*4 +4) && d>(lane*4)){
-      //car is not safe
-      if((check_car_s>car_s)&&((check_car_s - car_s) < SAFETY_DIS)){
-        current_state[2] = 1;
-      }
-    }else if(d<(lane*4) && d>(lane*4-4)){
-    //car is in the left lane 
-      if(abs(check_car_s - car_s) < SAFETY_DIS) current_state[1] = 1;
-    }else if(d<(lane*4 +8) && d>(lane*4+4)){
-    //car is in the right lane
-      if(abs(check_car_s - car_s) < SAFETY_DIS) current_state[3] = 1;
-    }
-  }
-  if(car_speed >= 45) current_state[4] = 2;
-  else if(car_speed <= 0.5) current_state[4] = 0;
-  else current_state[4] = 1;
-  return current_state;
-}
-
-//get possible action
-vector<int> get_possible_action(vector<int>& current_state){
-  vector<int> possible_action;
-  int lane = current_state[0];
-  int velo = current_state[4];
-  //lane
-  if(lane == 0) 
-    possible_action.push_back(3);
-  else if(lane == 1){
-    possible_action.push_back(3);
-    possible_action.push_back(2);
-  }else if(lane == 2)
-    possible_action.push_back(2);
-  //velo
-  if(velo == 0) possible_action.push_back(0);
-  else if(velo == 2) possible_action.push_back(1);
-  else{
-    possible_action.push_back(0);
-    possible_action.push_back(1);
-    possible_action.push_back(4);
-  } 
-  return possible_action;
-}
-
-int get_state_index(vector<int>& current_state){
-  int state_index = current_state[0]*24 + current_state[1]*12 + current_state[2]*6 + current_state[3]*3 + current_state[4];
-  return state_index;
-}
-
-//get the action of max q
-int get_max_q_action(int epsilon_greedy, vector<int> possible_action, int state_index){
-  int size = possible_action.size();
-  srand(time(0));
-  double ran_possible = rand()%100/(double)101;
-  if(epsilon_greedy && ran_possible < EPSILON){
-    return possible_action[(rand() % size)]; 
-  }else{
-    vector<double> Q_state = Q[state_index];
-    int max_index = -1;
-    double max_value = -DBL_MAX;
-    for(int i=0; i< Q_state.size(); i++){
-      auto it = find(possible_action.begin(), possible_action.end(), i);
-      if((it != possible_action.end()) && Q_state[i] > max_value){
-        max_index = i;
-        max_value = Q_state[i];
-      }
-    }
-    return max_index;
-  }
-}
-
-double get_reward(int last_action, vector<vector<double >>& sensor_fusion, double car_s, int lane) {
-    double r = 0;
-    //increase reward when acce; decrease when deacce
-    if (last_action == 0) r += 1;
-    else if (last_action == 1) r -= 1;
-    //decrease reward when not safety
-    for (int i = 0; i < sensor_fusion.size(); i++) {
-        float d = sensor_fusion[i][6];
-        double check_car_s = sensor_fusion[i][5];
-        if (d < (lane * 4 + 4) && d > (lane * 4)) {
-            //car is not safe
-            if ((check_car_s > car_s) && ((check_car_s - car_s) < SAFETY_DIS)) {
-                r -= 500;
-            }
-            return r;
-        }
-    }
-}
-
-
-//update Q table
-void update_Q_table(double r, int state_index, int action, int new_state_index, vector<int> possible_action){
-  // greedy method to get action index of max_q
-  int q_newstate_max_index = get_max_q_action(0, possible_action, new_state_index);
-  double q_newstate_max = Q[new_state_index][q_newstate_max_index];
-  Q[state_index][action] = Q[state_index][action] + LR*(r + GAMMA * q_newstate_max - Q[state_index][action]);
-  cout << "update state_index "<<state_index <<" action "<< action<<" with "<<Q[state_index][action] <<endl;
-
-}
-
-
 
 int main() {
   uWS::Hub h;
@@ -175,15 +51,11 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
   //start in lane 1
-  int lane = 1;
+    int lane = 1;
   //have a reference velocity to target
-  double ref_val = 5;
-  //initialize
-  vector<int> past_state = {lane, 0, 0, 0, 1};
-  int past_state_index = get_state_index(past_state);
-  int past_action = 0;
+    double ref_val = 0;
 
-  h.onMessage([&past_state_index, &past_state, &past_action, &ref_val,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
+  h.onMessage([&ref_val,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
                &map_waypoints_dx,&map_waypoints_dy,&lane]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
@@ -219,103 +91,43 @@ int main() {
 
           // Sensor Fusion Data, a list of all other cars on the same side 
           //   of the road.
-          vector<vector<double>> sensor_fusion = j[1]["sensor_fusion"];
+          auto sensor_fusion = j[1]["sensor_fusion"];
 
           //previous size
           int prev_size = previous_path_x.size();
 
-          //car in current lane
-          int current_lane = car_d/4;
-          //get current state
-          vector<int> current_state = get_current_state(current_lane, sensor_fusion, car_speed, car_s);
-                //get current state index
-          int current_state_index = get_state_index(current_state);
-          //get possible action
-          vector<int> possible_action = get_possible_action(current_state);
-          //using eplison greedy to get action
-          int current_action = get_max_q_action(1, possible_action, current_state_index);
-          //get reward
-          double r = get_reward(past_action, sensor_fusion, car_s, current_lane);
-          //update 
-          update_Q_table(r, past_state_index, past_action, current_state_index, possible_action);
-
-//          cout << "possible_action is ";
-//          for(int i=0; i<possible_action.size(); i++){
-//              cout << possible_action[i] << " ";
-//          }
-//          cout << endl;
-
 
           //here comes sensor fusion
           if(prev_size > 0) {
-           car_s = end_path_s;
+            car_s = end_path_s;
           }
 
-          // bool too_close = false;
-          // //find ref_v to use
-          // for(int i=0; i<sensor_fusion.size(); i++){
-          //   //car is in my lane
-          //   float d = sensor_fusion[i][6];
-          //   if(d<(lane*4 +4) && d>(lane*4)){
-          //     double vx = sensor_fusion[i][3];
-          //     double vy = sensor_fusion[i][4];
-          //     double check_speed = sqrt(vx*vx + vy*vy);
-          //     double check_car_s = sensor_fusion[i][5];
-          //     check_car_s += ((double)prev_size*0.02*check_speed);
-          //     //take action is car is close
-          //     if((check_car_s>car_s)&&((check_car_s - car_s) < 30)){
-          //       too_close = true;
-          //       if(lane > 0)
-          //         lane = 0;
-          //     }
-          //   }
-          // }
-
-          // if(too_close){
-          //   ref_val -= .224;
-          // }else if(ref_val < 49.5){
-          //   ref_val += .224;
-          // }
-          //here ends sensor fusion
-
-          //control input
-          
-          switch(current_action){
-            case 0: 
-              ref_val += 0.5;
-              break;
-            case 1: 
-              ref_val -= 0.5;
-              break;
-            case 2:
-              lane = current_lane - 1;
-              break;
-            case 3:
-              lane = current_lane + 1;
-              break;
-            case 4:
-              break;
-            default:
-              break;
-          }
-          if(ref_val < 0) ref_val = 0;
-          //debug
-          cout << "Q table is " << endl;
-          for(int i=0; i<Q.size();i++){
-              cout << i << " ";
-              for(int j=0; j<Q[0].size();j++){
-                  cout<<Q[i][j]<< " ";
+          bool too_close = false;
+          //find ref_v to use
+          for(int i=0; i<sensor_fusion.size(); i++){
+            //car is in my lane
+            float d = sensor_fusion[i][6];
+            if(d<(lane*4 +4) && d>(lane*4)){
+              double vx = sensor_fusion[i][3];
+              double vy = sensor_fusion[i][4];
+              double check_speed = sqrt(vx*vx + vy*vy);
+              double check_car_s = sensor_fusion[i][5];
+              check_car_s += ((double)prev_size*0.02*check_speed);
+              //take action is car is close
+              if((check_car_s>car_s)&&((check_car_s - car_s) < 30)){
+                too_close = true;
+                if(lane > 0)
+                  lane = 0;
               }
-              cout<<endl;
+            }
           }
-//          cout << "current_action is "<< current_action << endl;
-//          cout << "reference velo is "<< ref_val << endl;
-//          cout << "current lane is " << current_lane << endl;
-//          cout << "lane is " << lane << endl;
-          //update state and action for next iteration
-          past_state = current_state;
-          past_state_index = current_state_index;
-          past_action = current_action;
+
+          if(too_close){
+            ref_val -= .224;
+          }else if(ref_val < 49.5){
+            ref_val += .224;
+          }
+          //here ends sensor fusion
 
           //create a list of widely spaced (x,y) points, evenly spaces at 30m
           //later we will interpolate theses waypoints with spline
